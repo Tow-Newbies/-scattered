@@ -7,6 +7,36 @@ const IdOnTime = () => {
 };
 
 
+class Process {
+    constructor() {
+        this.middleWare = [];
+        this.cache = [];
+    }
+    // fn 必须是同步， 异步须转换成promise 或同步化
+    use(fn) {
+        this.middleWare.push(fn);
+    }
+
+    async next(val) {
+        const fn = this.cache.shift();
+        const nextVal = await fn(val);
+        if (this.cache.length) {
+            return this.next(nextVal) || val;
+        }
+        return nextVal || val;
+    }
+
+    start(val) {
+        this.cache = [...this.middleWare];
+        return new Promise((resolve) => {
+            const result = this.next(val);
+            resolve(result);
+        });
+    }
+
+}
+
+
 const SUCCESS = 'success';
 const FAIL = 'fail';
 
@@ -84,6 +114,34 @@ class Struct extends Base {
             // msgFailed: [],
             msgQuequeMap: {},
         };
+        this.middleWares = {};
+
+    }
+
+    use(name, middleWare = noop) {
+    	if(this.middleWares[name] && this.middleWares[name].push){
+    		this.middleWares[name].push(middleWare);
+    	}else{
+    		this.middleWares[name] = [middleWare];
+    	}
+        // (this.middleWares[name] || []).push(middleWare);
+    }
+
+    async next(name, val) {
+        const fn = this.cache[name].shift();
+        const nextVal = await fn(val);
+        if (this.cache.length) {
+            return this.next(name, nextVal) || val;
+        }
+        return nextVal || val;
+    }
+
+    start(val) {
+        this.cache = _.cloneDeep(this.middleWares);
+        console.log('cache', this.cache)
+        Object.keys(this.cache).forEach(name=>{
+        	this.next(name, val);
+        })
     }
 
 
@@ -144,6 +202,7 @@ class Struct extends Base {
 
     send(msg) {
         this.beforePost(msg);
+        this.start(msg);
         this.postMessage(msg);
     }
 
@@ -236,6 +295,13 @@ class Ins {
             msgGroup: {},
             msgIdxMap: {},
         };
+
+        this.im.use('log',(msg)=> {
+        	console.error('this is log fn', msg);
+        })
+        this.im.use('log', (msg)=>{
+        	console.error('log end', msg);
+        })
     }
 
     onConnect() {
@@ -461,5 +527,4 @@ class Ins {
     }
 }
 
-// 
-
+//

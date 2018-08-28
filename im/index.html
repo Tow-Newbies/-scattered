@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html>
+<meta http-equiv='Content-Type' content='text/html; charset=UTF-8' />
+
+<head>
+    <title>Welcome!</title>
+    <script src="https://code.jquery.com/jquery-3.2.1.min.js"></script>
+    <script type="text/javascript" src="https://cdn.bootcss.com/lodash.js/4.17.10/lodash.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/1.4.0/socket.io.js"></script>
+    <script type="text/javascript">
+    //
+    </script>
+    <script type="text/javascript" src="./im.js"></script>
+    <script type="text/javascript">
+    var ins;
+
+    const imList = [{
+        jid: '0_1000@1',
+        token: '3X7ZJ6fv-ojEb9G8Z1vRqXV7-28eDPO353MvQhpRM_aI12jT_iLP7w==.M2gt8fFbm4Ecf4iOR0cjlw==',
+    }, {
+        jid: '0_1001@1',
+        token: '3X7ZJ6fv-ojZLPzURN73s3V7-28eDPO3s49JDmWONfgNL0S_qbdILA==.MMe15DQAZs9U4RydSecZHg==',
+    }, {
+        jid: '0_1002@1',
+        token: '3X7ZJ6fv-oiahLORFnip5XV7-28eDPO3NInkzyH-IZ4PmQSbw1PXYA==.Ojw4b9X5BP8jrQxLsDpEzg==',
+    }];
+
+    var tokenMap = {
+        '0_1001@1': '3X7ZJ6fv-ojZLPzURN73s3V7-28eDPO3s49JDmWONfgNL0S_qbdILA==.MMe15DQAZs9U4RydSecZHg==',
+        '0_1000@1': '3X7ZJ6fv-ojEb9G8Z1vRqXV7-28eDPO353MvQhpRM_aI12jT_iLP7w==.M2gt8fFbm4Ecf4iOR0cjlw=='
+    }
+
+    function send() {
+        const msg = $("#chatDialog").val();
+        ins.sendMessage(msg);
+        $("#chatDialog").val('');
+    }
+
+    function asyncMsg() {
+        ins.asyncMessage();
+    }
+
+    function connect() {
+        var curUserToken = $('.user').val();
+        curUser = imList.filter(u => u.token === curUserToken)[0];
+
+        ins = new Ins({ server: 'http://192.168.15.82:9888?imToken=' + encodeURIComponent(curUserToken) + '&format=json&framework=sync' });
+
+        ins.init({
+            "reconnectionAttempts": 20,
+            "force new connection": true
+        });
+    }
+
+    function genList() {
+        console.log('--->>> gen list');
+        const ul = $('#messagePanel');
+        ul.empty();
+        const lisArr = [];
+        const group = ins.getKey();
+        const lis = ins.pool.msgGroup[group].map(msg => {
+            ul.prepend(`<li>${ msg.data } ===>  ${msg.isPosting ? 'sending...' : 'sent'}</li>`);
+        });
+    }
+
+
+
+    // timer();
+    </script>
+    <style>
+
+    </style>
+</head>
+
+<body>
+    <div>
+        curUser:
+        <select class='user'></select>
+        <br/>
+        <br>
+    </div>
+    <input id="chatDialog">
+    <br/>
+    <button id="connect" onclick="connect()">connect</button>
+    <button id="send" onclick="send()">send</button>
+    <button id="async" onclick="asyncMsg()">asyncMsg</button>
+    <br>
+    <br> to
+    <select onchange="setToUser(event)" class='to'></select>
+    <br>
+    <br>
+    <div>
+        <ul id="messagePanel"></ul>
+    </div>
+    <!-- <input id="offset" type="hidden" value="0"> -->
+</body>
+<script type="text/javascript">
+function genSelect(type, valType = 'token') {
+    const userSelect = $(document.querySelector(type));
+    imList.forEach(user => {
+        // var op = $("<option>").val(tokenMap[user][valType]).text(tokenMap[user].jid);
+        // userSelect.append(op);
+        userSelect.prepend(`<option value="${user[valType]}">${user.jid}</option>`)
+    });
+}
+
+function setToUser(e) {
+    ins.setToUser(e.target.value);
+}
+
+genSelect('.user');
+genSelect('.to', 'jid');
+</script>
+
+</html>
