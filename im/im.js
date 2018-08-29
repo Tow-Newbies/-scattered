@@ -7,6 +7,10 @@ const IdOnTime = () => {
 };
 
 
+/**
+ * 实现流程化事务处理， error 暂时未处理
+ * 
+ */
 class Process {
     constructor() {
         this.middleWare = [];
@@ -17,19 +21,22 @@ class Process {
         this.middleWare.push(fn);
     }
 
-    async next(val) {
+    // next 会重新绑定作用域， 所以在写中间件的时候，请注意中间件 的this 指向；
+    // 一旦中间出错，直接结束
+    async next({ originVal = null, val = null } = curVal, conext = null) {
         const fn = this.cache.shift();
-        const nextVal = await fn(val);
+        const _copy = _.cloneDeep({ originVal, val })
+        const nextVal = await fn.call(conext, _copy);
         if (this.cache.length) {
-            return this.next(nextVal) || val;
+            return this.next({ originVal, val: nextVal }, conext);
         }
-        return nextVal || val;
+        return { originVal, val: nextVal === undefined ? originVal : val };
     }
 
-    start(val) {
+    start(val, conext = null) {
         this.cache = [...this.middleWare];
         return new Promise((resolve) => {
-            const result = this.next(val);
+            const result = this.next({ originVal: val, val }, conext);
             resolve(result);
         });
     }
@@ -114,38 +121,19 @@ class Struct extends Base {
             // msgFailed: [],
             msgQuequeMap: {},
         };
-        this.middleWares = {};
+        this.middleWares = new Process();
 
     }
 
-    use(name, middleWare = noop) {
-    	if(this.middleWares[name] && this.middleWares[name].push){
-    		this.middleWares[name].push(middleWare);
-    	}else{
-    		this.middleWares[name] = [middleWare];
-    	}
-        // (this.middleWares[name] || []).push(middleWare);
+    use(fn) {
+        this.middleWares.use(fn);
     }
 
-    async next(name, val) {
-        const fn = this.cache[name].shift();
-        const nextVal = await fn(val);
-        if (this.cache.length) {
-            return this.next(name, nextVal) || val;
-        }
-        return nextVal || val;
-    }
-
-    start(val) {
-        this.cache = _.cloneDeep(this.middleWares);
-        console.log('cache', this.cache)
-        Object.keys(this.cache).forEach(name=>{
-        	this.next(name, val);
-        })
-    }
-
-
-
+    /**
+     * @deprecated [移动至上层代码]
+     * @param  {[type]}
+     * @return {[type]}
+     */
     decorateMsg(msg) {
         return {
             origin: _.cloneDeep(msg),
@@ -161,7 +149,12 @@ class Struct extends Base {
      * 在 TimeoutDelay 时限内没有收到 回执，则认为发送失败
      */
 
-    beforePost(msg) {
+    /**
+     * @deprecated [采用插件方式注入]
+     * @param  {[type]}
+     * @return {[type]}
+     */
+    beforePosts(msg) {
         const _msg = this.decorateMsg(msg);
 
         new Promise((resolve, reject) => {
@@ -200,14 +193,22 @@ class Struct extends Base {
         this.emit('message', JSON.stringify(msg));
     }
 
+    // 先进行中间件的处理，最终发送处理后的消息
     send(msg) {
-        this.beforePost(msg);
-        this.start(msg);
-        this.postMessage(msg);
+        this.middleWares.start(msg, this)
+            .then(res => {
+                this.postMessage(res.val);
+            })
     }
 
     /** 消息发送成功收到回执 或者 发送失败后统一处理, 无论成功还是失败，均从 发送队列【msgSentQueue】 中删除 */
-    resolveAfterPost(type = SUCCESS, msg) {
+    /**
+     * @deprecated [该逻辑移至上层逻辑实现]
+     * @param  {[type]}
+     * @param  {[type]}
+     * @return {[type]}
+     */
+    resolveAfterPosts(type = SUCCESS, msg) {
         const { onResult } = this.config;
         const { msgSentQueue, msgQuequeMap } = this.localPool;
         const target = _.cloneDeep(msgQuequeMap[msg.id]);
@@ -296,17 +297,17 @@ class Ins {
             msgIdxMap: {},
         };
 
-        this.im.use('log',(msg)=> {
-        	console.error('this is log fn', msg);
-        })
-        this.im.use('log', (msg)=>{
-        	console.error('log end', msg);
-        })
+        // 注册中间件
+        // this.im 用于调用 Struct 的方法， this 用于指向当前的作用域
+        this.im.use(this.beforePost.bind(this.im, this));
     }
 
     onConnect() {
         console.log('connected success.');
         // this.asyncMessage();
+        if(this.pool.msgArr.length){
+        	this.asyncMessage();
+        }
     }
 
     onDisconnect() {
@@ -383,15 +384,111 @@ class Ins {
 
     }
 
-    // 同步消息
+    decorateMsg(msg) {
+        return {
+            origin: _.cloneDeep(msg),
+            isFailed: false,
+            isPosting: true,
+            id: msg.id,
+            timestamp: Date.now(),
+        };
+    }
+
+    /**
+     * 发送前，先预存消息，用于判断消息发送成功或者失败
+     * 在 TimeoutDelay 时限内没有收到 回执，则认为发送失败
+     */
+
+    // 消息发送之前处理事件， 以中间件的方式插入
+    beforePost(originContext, { originVal }) {
+        const msg = originVal;
+        const _msg = originContext.decorateMsg(msg);
+
+        new Promise((resolve, reject) => {
+                this.localPool.msgSentQueue.push(_msg);
+                this.localPool.msgQuequeMap[_msg.id] = {
+                    id: _msg.id,
+                    idx: this.localPool.msgSentQueue.length - 1,
+                    origin: _.cloneDeep(_msg),
+                    promise: {
+                        resolve,
+                        reject,
+                    },
+                };
+
+                setTimeout(() => {
+                    reject(_msg);
+                }, TimeoutDelay);
+            })
+            .then((res) => {
+                console.log('resolve');
+                originContext.resolveAfterPost.call(originContext.im, 'success', res);
+            }, (rej) => {
+                originContext.resolveAfterPost.call(originContext.im, 'fail', rej);
+            })
+            .catch((e) => {
+                const m = this.localPool.msgQuequeMap[_msg.id];
+                if (m && m.promise && m.promise.reject) {
+                    m.promise.reject(_msg);
+                }
+            });
+
+        // return originVal;
+    }
+
+    /**
+     * 当逻辑处理完之后， 作用域 在 this.im
+     * 当有需要在发送消息收到回执后再进行处理的事务的时候，可以在这个方法中进行
+     * @param  {[type]}
+     * @param  {[type]}
+     * @return {[type]}
+     */
+    resolveAfterPost(type = SUCCESS, msg) {
+        const { onResult } = this.config;
+        const { msgSentQueue, msgQuequeMap } = this.localPool;
+        const target = _.cloneDeep(msgQuequeMap[msg.id]);
+        target.origin.isPosting = false;
+
+        if (type === SUCCESS) {
+            console.log('post success and received ack');
+            // post success and received ack
+        } else {
+            target.origin.isFailed = true;
+        }
+
+        // 不论成功失败，均从队列中删除该条消息
+        const newMsgSentQueue = [
+            ...(msgSentQueue.slice(0, target.idx) || []),
+            ...(msgSentQueue.slice(target.idx + 1) || []),
+        ];
+
+        delete msgQuequeMap[msg.id];
+
+        this.localPool = {
+            ...this.localPool,
+            msgSentQueue: [...newMsgSentQueue],
+            msgQuequeMap,
+        };
+        // 如果订阅有结果通知，那么调用通知外部
+        onResult(target, type);
+    }
+
+    /**
+     * 同步指定的offest 后的消息
+     * @param  {[type]}
+     * @return {[type]}
+     */
     asyncMessage(offset) {
-        count--;
-        console.log('asyncMessage', count, offset);
-
-
+        console.log('asyncMessage', offset);
 
         const { msgGroup, msgArr } = this.pool;
 
+        /**
+         * 从msgArr 中获取最近的seq
+         * @param  {[type]}
+         * @param  {[type]}
+         * @return {[type]}
+         */
         const getSeqLatest = (msgArr, len) => {
             if (!msgArr.length) {
                 return 0;
